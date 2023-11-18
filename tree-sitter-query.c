@@ -88,7 +88,7 @@ static char *guess_language_from_filename(const char *file)
 	return NULL;
 }
 
-static char *fetch_query_string(char *lang, char *type)
+static char *fetch_query_string(char *lang)
 {
 	int fd;
 	char *query_string;
@@ -99,7 +99,7 @@ static char *fetch_query_string(char *lang, char *type)
 	if (!query_path)
 		return NULL;
 
-	sprintf(path_name, "%s/%s/%s.scm", query_path, lang, type);
+	sprintf(path_name, "%s/%s/tags.scm", query_path, lang);
 	fd = open(path_name, O_RDONLY);
 	if (fd == -1)
 		return NULL;
@@ -115,16 +115,6 @@ static char *fetch_query_string(char *lang, char *type)
 	return query_string;
 }
 
-static char *fetch_tags_query(char *lang)
-{
-	return fetch_query_string(lang, "tags");
-}
-
-static char *fetch_reference_query(char *lang)
-{
-	return fetch_query_string(lang, "ref");
-}
-
 static TSQueryCursor *alloc_cached_cursor()
 {
 	static TSQueryCursor *cursor;
@@ -133,10 +123,10 @@ static TSQueryCursor *alloc_cached_cursor()
 	return cursor;
 }
 
-static void tree_sitter_parse(const struct parser_param *param, int type)
+static void tree_sitter_parse(const struct parser_param *param)
 {
+	int type;
 	struct Buf_Read buf;
-	char *query_string;
 	char read_buffer[READ_CHUNK_SIZE];
 
 	TSParser *parser = ts_parser_new();
@@ -153,11 +143,8 @@ static void tree_sitter_parse(const struct parser_param *param, int type)
 
 	// Get the root node of the syntax tree.
 	TSNode root_node = ts_tree_root_node(tree);
-	if (type == PARSER_DEF)
-		query_string = fetch_tags_query(guess_language_from_filename(param->file));
-	else
-		query_string = fetch_reference_query(guess_language_from_filename(param->file));
 
+	char *query_string = fetch_query_string(guess_language_from_filename(param->file));
 	if (!query_string)
 		param->die("Failed to fetch query from query directory\n");
 
@@ -182,20 +169,35 @@ static void tree_sitter_parse(const struct parser_param *param, int type)
 	// Iterate over the query matches and print the function names
 	while (ts_query_cursor_next_match(cursor, &match)) {
 
+		uint32_t length;
 		TSPoint point;
+		const char *pattern;
 		char name[MAX_TOKEN_SIZE] = {0};
-		char definition[MAX_TOKEN_SIZE] = {0};
+		char full_details[MAX_TOKEN_SIZE] = {0};
 
-		if (match.capture_count != 2) {
+		if (match.capture_count < 2) {
 			param->warning("Match don't have two objects (query string %s)\n", query_string);
 			goto error_match;
 		}
-		fetch_node_details(buf.fd, match.captures[1].node, name);
-		fetch_node_details(buf.fd, match.captures[0].node, definition);
 
-		point = ts_node_start_point(match.captures[0].node);
-		prdebug("type = %d tag = :%s: lineno: %d file %s line :%s:\n", type, name, point.row + 1, param->file, definition);
-		param->put(type, name, point.row + 1, param->file, definition, param->arg);
+		for (int i= 0; i < match.capture_count; i++) {
+			pattern = ts_query_capture_name_for_id(query, match.captures[i].index, &length);
+
+			if (length >= 4 && !strncmp(pattern, "name", 4))
+				fetch_node_details(buf.fd, match.captures[i].node, name);
+			else if (length >= 10 && !strncmp(pattern, "definition", 10)) {
+				type = PARSER_DEF;
+				fetch_node_details(buf.fd, match.captures[i].node, full_details);
+				point = ts_node_start_point(match.captures[i].node);
+			} else if (length >= 9 && !strncmp(pattern, "reference", 9)) {
+				type = PARSER_REF_SYM;
+				fetch_node_details(buf.fd, match.captures[i].node, full_details);
+				point = ts_node_start_point(match.captures[i].node);
+			}
+		}
+
+		prdebug("type = %d tag = :%s: lineno: %d file %s line :%s:\n", type, name, point.row + 1, param->file, full_details);
+		param->put(type, name, point.row + 1, param->file, full_details, param->arg);
 	}
 
 error_match:
@@ -209,16 +211,6 @@ error_query:
 	ts_parser_delete(parser);
 	close(buf.fd);
 	free(query_string);
-}
-
-static void tree_sitter_parse_tags(const struct parser_param *param)
-{
-	return tree_sitter_parse(param, PARSER_DEF);
-}
-
-static void tree_sitter_parse_references(const struct parser_param *param)
-{
-	return tree_sitter_parse(param, PARSER_REF_SYM);
 }
 
 void parser(const struct parser_param *param)
@@ -249,7 +241,6 @@ void parser(const struct parser_param *param)
 	if (!tree_sitter_language)
 		param->die("Cannot lookup function %s in lib %s", function, lib);
 
-	tree_sitter_parse_tags(param);
-	tree_sitter_parse_references(param);
+	tree_sitter_parse(param);
 	dlclose(handle);
 }

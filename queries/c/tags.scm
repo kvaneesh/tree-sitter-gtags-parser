@@ -24,3 +24,5 @@
 
 (preproc_def
   name: (identifier) @name) @definition.macro
+
+(call_expression function: (identifier) @name arguments: (_)) @reference.call
