@@ -37,7 +37,6 @@
 
 #define READ_CHUNK_SIZE 500
 #define MAX_TOKEN_SIZE 500
-#define MAX_LINE_SIZE  200
 TSLanguage * (*tree_sitter_language)(void);
 
 struct Buf_Read {
