@@ -84,6 +84,9 @@ static char *guess_language_from_filename(const char *file)
 {
 	if (strstr(file, ".c") || strstr(file, ".h"))
 		return "c";
+	else if (strstr(file, ".py"))
+		return "python";
+
 	return NULL;
 }
 
